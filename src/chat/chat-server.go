@@ -1,120 +1,74 @@
 package chat
 
 import (
+	"context"
 	"log"
-	"math/rand"
-	"sync"
-	"time"
 
 	chatpb "github.com/DiarCode/grpc-chat-app/src/chat/gen"
+	"github.com/DiarCode/grpc-chat-app/src/chat/services"
+	"github.com/rabbitmq/amqp091-go"
 )
 
-type messageUnit struct {
-	ClientName        string
-	MessageBody       string
-	MessageUniqueCode int
-	ClientUniqueCode  int
-}
-
-type messageHandle struct {
-	MQue []messageUnit
-	mu   sync.Mutex
-}
-
-var messageHandleObject = messageHandle{}
-
 type ChatServer struct {
+	MessageQueue *amqp091.Channel
 }
 
-// define ChatService
-func (is *ChatServer) ChatService(csi chatpb.ChatService_BroadcastMessageServer) error {
+const (
+	MESSAGE_QUEUE_NAME = "messageQueue"
+)
 
-	clientUniqueCode := rand.Intn(1e6)
-	err := make(chan error)
+func (s *ChatServer) JoinStream(req *chatpb.JoinRequest, stream chatpb.ChatService_JoinStreamServer) error {
+	log.Printf("User %s joined the chat", req.Username)
 
-	// receive messages - init a go routine
-	go receiveFromStream(csi, clientUniqueCode, err)
+	queue, err := services.DeclareQueue(s.MessageQueue, MESSAGE_QUEUE_NAME)
+	if err != nil {
+		return err
+	}
 
-	// send messages - init a go routine
-	go sendToStream(csi, clientUniqueCode, err)
+	msgs, err := services.ConsumeFromQueue(s.MessageQueue, queue.Name)
+	if err != nil {
+		return err
+	}
 
-	return <-err
-
-}
-
-// receive messages
-func receiveFromStream(csi_ chatpb.ChatService_BroadcastMessageServer, clientUniqueCode_ int, err_ chan error) {
-
-	//implement a loop
+	// Continuously listen for new messages
 	for {
-		mssg, err := csi_.Recv()
-		if err != nil {
-			log.Printf("Error in receiving message from client :: %v", err)
-			err_ <- err
-		} else {
-
-			messageHandleObject.mu.Lock()
-
-			messageHandleObject.MQue = append(messageHandleObject.MQue, messageUnit{
-				ClientName:        mssg.Username,
-				MessageBody:       mssg.Message,
-				MessageUniqueCode: rand.Intn(1e8),
-				ClientUniqueCode:  clientUniqueCode_,
-			})
-
-			log.Printf("%v", messageHandleObject.MQue[len(messageHandleObject.MQue)-1])
-
-			messageHandleObject.mu.Unlock()
+		select {
+		case d, ok := <-msgs:
+			if !ok {
+				// Channel closed
+				return nil
+			}
+			message := &chatpb.Message{
+				Username: d.Headers["username"].(string),
+				Text:     string(d.Body),
+			}
+			if err := stream.Send(message); err != nil {
+				return err
+			}
+		case <-stream.Context().Done():
+			// Client disconnected
+			log.Printf("User %s left the chat", req.Username)
+			return nil
 		}
 	}
 }
 
-// send message
-func sendToStream(csi_ chatpb.ChatService_BroadcastMessageServer, clientUniqueCode_ int, err_ chan error) {
+func (s *ChatServer) SendMessage(ctx context.Context, req *chatpb.Message) (*chatpb.Message, error) {
+	log.Printf("Received message from %s: %s", req.Username, req.Text)
 
-	//implement a loop
-	for {
+	err := services.PublishToQueue(
+		s.MessageQueue,
+		MESSAGE_QUEUE_NAME,
+		[]byte(req.Text),
+		amqp091.Table{"username": req.Username},
+	)
 
-		//loop through messages in MQue
-		for {
-
-			time.Sleep(500 * time.Millisecond)
-
-			messageHandleObject.mu.Lock()
-
-			if len(messageHandleObject.MQue) == 0 {
-				messageHandleObject.mu.Unlock()
-				break
-			}
-
-			senderUniqueCode := messageHandleObject.MQue[0].ClientUniqueCode
-			senderName := messageHandleObject.MQue[0].ClientName
-			message := messageHandleObject.MQue[0].MessageBody
-
-			messageHandleObject.mu.Unlock()
-
-			//send message to designated client (do not send to the same client)
-			if senderUniqueCode != clientUniqueCode_ {
-
-				err := csi_.Send(&chatpb.Message{Username: senderName, Message: message})
-
-				if err != nil {
-					err_ <- err
-				}
-
-				messageHandleObject.mu.Lock()
-
-				if len(messageHandleObject.MQue) > 1 {
-					messageHandleObject.MQue = messageHandleObject.MQue[1:] // delete the message at index 0 after sending to receiver
-				} else {
-					messageHandleObject.MQue = []messageUnit{}
-				}
-
-				messageHandleObject.mu.Unlock()
-			}
-
-		}
-
-		time.Sleep(100 * time.Millisecond)
+	if err != nil {
+		return nil, err
 	}
+
+	return &chatpb.Message{
+		Username: req.Username,
+		Text:     req.Text,
+	}, nil
 }

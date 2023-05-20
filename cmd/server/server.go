@@ -1,27 +1,46 @@
 package main
 
 import (
-	"fmt"
 	"log"
 	"net"
 
+	"github.com/DiarCode/grpc-chat-app/src/chat"
+	chatpb "github.com/DiarCode/grpc-chat-app/src/chat/gen"
+	amqp "github.com/rabbitmq/amqp091-go"
 	"google.golang.org/grpc"
 )
 
 const (
-	port = 8080
+	port = ":50051"
 )
 
 func main() {
-	lis, err := net.Listen("tcp", fmt.Sprintf(":%v", port))
+	conn, err := amqp.Dial("amqp://guest:guest@localhost:5672/")
 	if err != nil {
-		log.Fatalf("Failed to listen on port %v: %v", port, err)
+		log.Fatalf("Failed to connect to RabbitMQ: %v", err)
+	}
+	defer conn.Close()
+
+	channel, err := conn.Channel()
+	if err != nil {
+		log.Fatalf("Failed to open a channel: %v", err)
+	}
+	defer channel.Close()
+	log.Println("RabbitMQ channel created")
+
+	server := grpc.NewServer()
+	chatpb.RegisterChatServiceServer(server, &chat.ChatServer{MessageQueue: channel})
+
+	lis, err := net.Listen("tcp", port)
+	if err != nil {
+		log.Fatalf("Failed to listen: %v", err)
 	}
 
-	grpcServer := grpc.NewServer()
+	log.Printf("Server is running on port %v", port)
 
-	if err := grpcServer.Serve(lis); err != nil {
-		log.Fatalf("Failed to serve gRPC server: %v", err)
+	err = server.Serve(lis)
+	if err != nil {
+		log.Fatalf("Failed to serve: %v", err)
 	}
 
 }

@@ -3,107 +3,66 @@ package main
 import (
 	"bufio"
 	"context"
-	"fmt"
+	"io"
 	"log"
 	"os"
-	"strings"
 
 	chatpb "github.com/DiarCode/grpc-chat-app/src/chat/gen"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 )
 
-func main() {
-
-	fmt.Println("Enter Server IP:Port ::: ")
-	reader := bufio.NewReader(os.Stdin)
-	serverID, err := reader.ReadString('\n')
-
-	if err != nil {
-		log.Printf("Failed to read from console :: %v", err)
+func receiveMessages(stream chatpb.ChatService_JoinStreamClient) {
+	for {
+		msg, err := stream.Recv()
+		if err != nil {
+			if err == io.EOF {
+				log.Println("Chat stream closed")
+				return
+			}
+			log.Fatalf("Failed to receive a message: %v", err)
+		}
+		log.Printf("[%s]: %s", msg.Username, msg.Text)
 	}
-	serverID = strings.Trim(serverID, "\r\n")
+}
 
-	log.Println("Connecting : " + serverID)
-
-	//connect to grpc server
-	conn, err := grpc.Dial(serverID, grpc.WithTransportCredentials(insecure.NewCredentials()))
-
+func main() {
+	conn, err := grpc.Dial("localhost:50051", grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
-		log.Fatalf("Faile to conncet to gRPC server :: %v", err)
+		log.Fatalf("Failed to connect to the server: %v", err)
 	}
 	defer conn.Close()
 
-	//call ChatService to create a stream
 	client := chatpb.NewChatServiceClient(conn)
 
-	stream, err := client.BroadcastMessage(context.Background())
+	username := os.Args[1]
+	log.Printf("======== Welcome, %s! ========", username)
+
+	// Join the chat stream
+	stream, err := client.JoinStream(context.Background(), &chatpb.JoinRequest{Username: username})
 	if err != nil {
-		log.Fatalf("Failed to call ChatService :: %v", err)
+		log.Fatalf("Failed to join the chat stream: %v", err)
 	}
 
-	// implement communication with gRPC server
-	ch := clienthandle{stream: stream}
-	ch.clientConfig()
-	go ch.sendMessage()
-	go ch.receiveMessage()
-
-	//blocker
-	bl := make(chan bool)
-	<-bl
-
-}
-
-// clienthandle
-type clienthandle struct {
-	stream     chatpb.ChatService_BroadcastMessageClient
-	clientName string
-}
-
-func (ch *clienthandle) clientConfig() {
+	go receiveMessages(stream)
 
 	reader := bufio.NewReader(os.Stdin)
-	fmt.Printf("Your Name : ")
-	name, err := reader.ReadString('\n')
-	if err != nil {
-		log.Fatalf(" Failed to read from console :: %v", err)
-	}
-	ch.clientName = strings.Trim(name, "\r\n")
 
-}
-
-func (ch *clienthandle) sendMessage() {
 	for {
-
-		reader := bufio.NewReader(os.Stdin)
-		clientMessage, err := reader.ReadString('\n')
+		input, err := reader.ReadString('\n')
 		if err != nil {
-			log.Fatalf(" Failed to read from console :: %v", err)
-		}
-		clientMessage = strings.Trim(clientMessage, "\r\n")
-
-		clientMessageBox := &chatpb.Message{
-			Username: ch.clientName,
-			Message:  clientMessage,
+			log.Printf("Failed to read user input: %v", err)
+			continue
 		}
 
-		err = ch.stream.Send(clientMessageBox)
+		message := &chatpb.Message{
+			Username: username,
+			Text:     input,
+		}
 
+		_, err = client.SendMessage(context.Background(), message)
 		if err != nil {
-			log.Printf("Error while sending message to server :: %v", err)
+			log.Fatalf("Failed to send a message: %v", err)
 		}
-
-	}
-}
-
-// receive message
-func (ch *clienthandle) receiveMessage() {
-	for {
-		mssg, err := ch.stream.Recv()
-		if err != nil {
-			log.Printf("Error in receiving message from server :: %v", err)
-		}
-
-		fmt.Printf("%s : %s \n", mssg.Username, mssg.Message)
 	}
 }
