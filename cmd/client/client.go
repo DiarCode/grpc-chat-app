@@ -12,7 +12,7 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 )
 
-func receiveMessages(stream chatpb.ChatService_JoinStreamClient) {
+func receiveMessages(stream chatpb.ChatService_JoinStreamClient, currentUser string) {
 	for {
 		msg, err := stream.Recv()
 		if err != nil {
@@ -22,7 +22,10 @@ func receiveMessages(stream chatpb.ChatService_JoinStreamClient) {
 			}
 			log.Fatalf("Failed to receive a message: %v", err)
 		}
-		log.Printf("[%s]: %s", msg.Username, msg.Text)
+
+		if currentUser != msg.Username {
+			log.Printf("[%s]: %s", msg.Username, msg.Text)
+		}
 	}
 }
 
@@ -44,14 +47,15 @@ func main() {
 		log.Fatalf("Failed to join the chat stream: %v", err)
 	}
 
-	go receiveMessages(stream)
+	go receiveMessages(stream, username)
 
-	reader := bufio.NewReader(os.Stdin)
+	// reader := bufio.NewReader(os.Stdin)
+	scanner := bufio.NewScanner(os.Stdin)
 
-	for {
-		input, err := reader.ReadString('\n')
-		if err != nil {
-			log.Printf("Failed to read user input: %v", err)
+	for scanner.Scan() {
+		input := scanner.Text()
+		if input == "" {
+			log.Print("No empty messages")
 			continue
 		}
 

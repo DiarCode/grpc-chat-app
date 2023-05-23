@@ -6,7 +6,7 @@ import (
 
 	"github.com/DiarCode/grpc-chat-app/src/chat"
 	chatpb "github.com/DiarCode/grpc-chat-app/src/chat/gen"
-	amqp "github.com/rabbitmq/amqp091-go"
+	"github.com/streadway/amqp"
 	"google.golang.org/grpc"
 )
 
@@ -42,5 +42,4 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to serve: %v", err)
 	}
-
 }

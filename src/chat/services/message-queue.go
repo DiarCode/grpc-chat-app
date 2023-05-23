@@ -1,11 +1,9 @@
 package services
 
 import (
-	"context"
 	"log"
-	"time"
 
-	amqp "github.com/rabbitmq/amqp091-go"
+	"github.com/streadway/amqp"
 )
 
 func NewRabbitMQ() *amqp.Channel {
@@ -25,11 +23,7 @@ func NewRabbitMQ() *amqp.Channel {
 }
 
 func PublishToQueue(ch *amqp.Channel, key string, body []byte, headers amqp.Table) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	err := ch.PublishWithContext(
-		ctx,
+	err := ch.Publish(
 		"",    // exchange
 		key,   // routing key
 		false, // mandatory
